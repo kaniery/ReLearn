@@ -1,5 +1,34 @@
 services:
   # --------------------
+  # Rust
+  # --------------------
+  rust-api:
+    build: 
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: rust_api
+    restart: always
+    env_file:
+      - ./.env 
+    ports:
+      # ホストの 8080 を API サーバーのポートにマッピング
+      - "8080:8080" 
+    # API サーバーのコードが置かれているディレクトリをマウント（開発時推奨）
+    volumes:
+      - ./api:/usr/src/app
+    depends_on:
+      # API サーバーは DB が立ち上がるのを待ってから起動する
+      mariadb:
+        condition: service_healthy 
+      mongodb:
+        condition: service_started
+    environment:
+      # MariaDB
+      DATABASE_URL_MARIA: "mysql://${MARIADB_USER}:${MARIADB_PASSWORD}@mariadb:3306/${MARIADB_DATABASE}"
+      # MongoDB 
+      DATABASE_URL_MONGO: "mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017"
+      TZ: 'Asia/Tokyo'
+  # --------------------
   # MariaDB 
   # --------------------
   mariadb:
@@ -20,8 +49,8 @@ services:
       - mariadb_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MARIADB_ROOT_PASSWORD}"]
-      interval: 10s
-      timeout: 5s
+      interval: 15s
+      timeout: 10s
       retries: 5
 
   # --------------------

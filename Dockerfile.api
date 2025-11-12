@@ -1,0 +1,20 @@
+FROM rust:latest AS builder
+WORKDIR /usr/src/app
+
+COPY api/Cargo.toml api/Cargo.lock ./
+
+RUN mkdir src
+RUN echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+
+COPY api/src ./src
+
+RUN rm -f target/release/deps/api
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+ENV TZ=Asia/Tokyo
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+COPY --from=builder /usr/src/app/target/release/api /usr/local/bin/api
+
+CMD ["/usr/local/bin/api"]
