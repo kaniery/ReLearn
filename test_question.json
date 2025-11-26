@@ -1,0 +1,6 @@
+{
+  "qualification_id": 1,
+  "topic_id": 1,
+  "author_user_id": 1,
+  "question_data": "Go言語のgoroutineとチャネルの関係性について、具体的なコード例とともに説明せよ。"
+}

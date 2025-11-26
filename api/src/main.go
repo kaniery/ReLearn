@@ -2,82 +2,209 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/go-sql-driver/mysql" 
 )
 
+// データベースのスキーマファイル名
+const schemaFilePath = "schema.sql"
+
+// ユーザーデータの構造体 (JSONのパース用)
+type UserData struct {
+	Username      string `json:"username"`
+	Email         string `json:"email"`
+	PasswordHash  string `json:"password_hash"`
+}
+
+// 質問データの構造体 (JSONのパース用)
+type QuestionData struct {
+	QualificationID int    `json:"qualification_id"`
+	TopicID         int    `json:"topic_id"`
+	AuthorUserID    int    `json:"author_user_id"`
+	QuestionData    string `json:"question_data"`
+}
+
+// データベーススキーマを初期化する関数
+func initializeDB(db *sql.DB, schemaFilePath string) error {
+	log.Println("Initializing database schema...")
+
+	// schema.sqlファイルを読み込む
+	sqlBytes, err := ioutil.ReadFile(schemaFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read schema file: %w", err)
+	}
+	sqlStr := string(sqlBytes)
+
+	_, err = db.Exec(sqlStr)
+	if err != nil {
+		log.Printf("Warning: Failed to execute schema SQL. Error: %v", err)
+	} else {
+		log.Println("Database schema executed successfully!")
+	}
+	return nil
+}
+
+//ユーザーをPOSTで受け取り、DBに保存するハンドラ
+func handleUserPost(db *sql.DB) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        if r.Method != "POST" {
+            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
+
+        var data UserData
+        if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+            http.Error(w, "Invalid request body (JSON format error)", http.StatusBadRequest)
+            return
+        }
+        
+        // 必須フィールドのチェック
+        if data.Username == "" || data.Email == "" || data.PasswordHash == "" {
+            http.Error(w, "Missing required fields (username, email, password_hash)", http.StatusBadRequest)
+            return
+        }
+
+        query := `
+            INSERT INTO users 
+            (username, email, password_hash) 
+            VALUES (?, ?, ?)
+        `
+        
+        result, err := db.Exec(query, 
+            data.Username, 
+            data.Email, 
+            data.PasswordHash,
+        )
+
+        if err != nil {
+            log.Printf("❌ Database INSERT error: %v", err)
+            http.Error(w, "Failed to save user due to database error (e.g., duplicate email)", http.StatusInternalServerError)
+            return
+        }
+
+        lastID, _ := result.LastInsertId()
+        w.WriteHeader(http.StatusCreated)
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]interface{}{
+            "message": "User saved successfully", 
+            "id": lastID,
+        })
+    }
+}
+
+// 質問をPOSTで受け取り、DBに保存するハンドラ
+func handleQuestionPost(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var data QuestionData
+		// JSONデータをパース
+		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+			http.Error(w, "Invalid request body (JSON format error)", http.StatusBadRequest)
+			return
+		}
+
+		// データベースに挿入するためのSQLクエリ
+		query := `
+            INSERT INTO questions 
+            (qualification_id, topic_id, author_user_id, question_data) 
+            VALUES (?, ?, ?, ?)
+        `
+		
+		result, err := db.Exec(query, 
+			data.QualificationID, 
+			data.TopicID, 
+			data.AuthorUserID, 
+			data.QuestionData,
+		)
+
+		if err != nil {
+			log.Printf("❌ Database INSERT error: %v", err)
+			http.Error(w, "Failed to save data due to database error", http.StatusInternalServerError)
+			return
+		}
+
+		lastID, _ := result.LastInsertId()
+		w.WriteHeader(http.StatusCreated)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "Question saved successfully", 
+			"id": lastID,
+		})
+	}
+}
+
 func main() {
-	// Docker Composeから設定された環境変数
+	// Docker Composeで設定した接続URLを環境変数から取得
 	dbURL := os.Getenv("DATABASE_URL_MARIA")
 	if dbURL == "" {
-		log.Fatal("DATABASE_URL_MARIA environment variable not set.")
+		log.Fatal("FATAL: DATABASE_URL_MARIA environment variable not set.")
 	}
-    // go-sql-driverのURL形式に変換: [USER]:[PASSWORD]@tcp([HOST]:[PORT])/[DATABASE]?charset=utf8mb4
-    // Goのドライバは、URLスキーマ（mysql://）を必要としないため、手動で組み立てる
-	// ここでは環境変数から直接取得するため、Goのコード側では一旦このまま進めます。
-	// ※ compose.ymlのDATABASE_URL_MARIAの値がそのままmysql://...の形式であれば、
-	//    ドライバが解釈できる形式に修正する必要があります。（例：ユーザー名:パスワード@tcp(ホスト名:ポート)/DB名）
 
-    // 暫定的な接続文字列の組み立て
-    // 実際には、docker-compose.ymlでDATABASE_URL_MARIAを以下の形式に修正するとより簡単です:
-    // "relean_MARIADB_USER:relearn_MARIADB_PASSWORD@tcp(mariadb:3306)/relean_MARIADB_DATABASE?charset=utf8&parseTime=true"
-    
-    // 一旦、ここではGoの接続部分をシンプルに保ちます。
-	// GoのMySQLドライバは、ユーザー名:パスワード@tcp(ホスト名:ポート)/データベース名 の形式を期待します。
-	
-	// compose.ymlのDATABASE_URL_MARIAが "mysql://..." の場合、文字列操作が必要です。
-	// 簡略化のため、ここではDB接続が成功する最小限のGoコードを提示します。
-	
-	// 接続情報の再構成 (DATABASE_URL_MARIAが上記の形式であると仮定)
-	// (GoのMySQLドライバはURLパーサーを持っていないため、生文字列を組み立てるのが一般的)
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:3306)/%s?charset=utf8&parseTime=true",
 		os.Getenv("MARIADB_USER"),
 		os.Getenv("MARIADB_PASSWORD"),
-		"mariadb", // サービス名
+		"mariadb", 
 		os.Getenv("MARIADB_DATABASE"),
 	)
-	
+
 	log.Printf("Attempting to connect to MariaDB: %s", "mariadb")
 
-	// 接続プールを作成
+	// MariaDBに接続
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		log.Fatalf("❌ Failed to open database connection: %v", err)
 	}
 	defer db.Close()
+	
+    // DBが起動するまでリトライするロジック（depends_onだけでは不十分な場合があるため）
+    log.Println("Attempting to connect to MariaDB...")
+    maxRetries := 10
+    for i := 0; i < maxRetries; i++ {
+        err = db.Ping()
+        if err == nil {
+            log.Println("✅ Successfully connected to MariaDB.")
+            break
+        }
+        log.Printf("Waiting for MariaDB... attempt %d/%d (Error: %v)", i+1, maxRetries, err)
+        time.Sleep(2 * time.Second)
+        
+        if i == maxRetries-1 {
+            log.Fatalf("❌ Failed to ping database after %d attempts: %v", maxRetries, err)
+        }
+    }
 
-	// DBが利用可能になるまで待機
-	// depends_on: service_healthyがあるため、多くの場合不要だが、念のため実装
-	for i := 0; i < 10; i++ {
-		err = db.Ping()
-		if err == nil {
-			break
-		}
-		log.Printf("Waiting for database... attempt %d/10", i+1)
-		time.Sleep(2 * time.Second)
+	// データベーススキーマを初期化（テーブル作成）
+	if err := initializeDB(db, schemaFilePath); err != nil {
+		log.Fatalf("❌ Database initialization failed: %v", err)
 	}
+	
+	// ----------------------------------------------------
+	// API エンドポイントの設定
+	// ----------------------------------------------------
+	
+	//ユーザー登録エンドポイント
+	http.HandleFunc("/api/data/user", handleUserPost(db))
+	//問題登録エンドポイント (http://localhost:8080/api/data/question)
+	http.HandleFunc("/api/data/question", handleQuestionPost(db))
+	
+	// ヘルスチェックエンドポイント (コンテナが動作しているか確認)
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "OK")
+	})
 
-	if err != nil {
-		log.Fatalf("❌ Failed to ping database after multiple attempts: %v", err)
-	}
-
-	log.Println("✅ Successfully connected to MariaDB!")
-
-	// 簡単なクエリの実行
-	var result int
-	err = db.QueryRow("SELECT 1 + 1").Scan(&result)
-	if err != nil {
-		log.Fatalf("❌ Query failed: %v", err)
-	}
-	log.Printf("💡 Query result (1 + 1): %d", result)
-
-	// APIサーバーの起動ロジックなどをここに追加
-
-    // 接続確認後、終了させるか、APIサーバを立ち上げるループに入る
-    fmt.Println("Go API is running (or will exit after connection test).")
+	log.Println("Go API Server starting on :8080...")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
