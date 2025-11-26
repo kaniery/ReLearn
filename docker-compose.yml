@@ -1,0 +1,45 @@
+services:
+  # --------------------
+  # Go API
+  # --------------------
+  go-api:
+    build: 
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: go_api
+    restart: always
+    env_file:
+      - ./.env 
+    ports:
+      - "8080:8080" 
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      DATABASE_URL_MARIA: "mysql://${MARIADB_USER}:${MARIADB_PASSWORD}@mariadb:3306/${MARIADB_DATABASE}"
+      TZ: 'Asia/Tokyo'
+
+  # --------------------
+  # MariaDB
+  # --------------------
+  mariadb:
+    image: mariadb:10.6
+    container_name: mariadb_db
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      TZ: 'Asia/Tokyo'
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "-u", "root", "-p${MARIADB_ROOT_PASSWORD}"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  mariadb_data:
